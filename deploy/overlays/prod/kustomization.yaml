@@ -5,8 +5,8 @@ resources:
   - ../../base
 images:
   - name: api
-    newName: api
-    newTag: initial
+    newName: ghcr.io/yxmmy/plateforme-devops
+    newTag: "00079854"
 replicas:
   - name: api
     count: 2
