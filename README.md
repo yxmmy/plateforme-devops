@@ -1,7 +1,8 @@
 # Plateforme DevOps
 
-TP1 à TP3 : un cluster Kubernetes local et ArgoCD gérés par Terraform,
-une API déployée par GitOps et une image publiée par GitHub Actions.
+TP1 à TP4 : un cluster Kubernetes local et ArgoCD gérés par Terraform,
+une API déployée par GitOps, une image publiée par GitHub Actions et un secret
+chiffré dans Git avec Sealed Secrets.
 
 ## Prérequis
 
@@ -207,3 +208,69 @@ retravailler : le pipeline a ajouté un commit sur `main`.
   `GITHUB_TOKEN` ne redéclenchent pas non plus les workflows de push.
 
 Les images GHCR remplacent le chargement manuel de `api:initial` dans le cluster.
+
+## TP4 : un secret chiffré dans Git
+
+`deploy/argocd/sealed-secrets.yaml` confie à ArgoCD l’installation du chart
+`sealed-secrets` `2.20.0` (contrôleur `0.40.0`). Le contrôleur est nommé
+`sealed-secrets-controller` dans `kube-system`, comme le client `kubeseal`
+l’attend.
+
+`deploy/overlays/dev/api-secret-scelle.yaml` contient un `SealedSecret` nommé
+`api-secret`, scellé pour le namespace `dev`. Seul ce fichier chiffré est
+versionné. Le contrôleur le déchiffre et crée le `Secret` dans le cluster.
+
+Le Deployment utilise `envFrom.secretRef` pour fournir la variable `JETON`
+au conteneur. La référence est optionnelle : le même Deployment fonctionne
+en prod, où aucun secret n’est encore configuré.
+
+### Vérifier
+
+```bash
+kubectl --context kind-plateforme -n argocd get applications
+kubectl --context kind-plateforme -n dev get sealedsecret api-secret
+kubectl --context kind-plateforme -n dev get secret api-secret -o name
+kubectl --context kind-plateforme -n dev port-forward svc/api 8080:80
+```
+
+`curl localhost:8080/` doit afficher `jeton_present: true` en dev. L’API
+n’affiche jamais la valeur du jeton. En prod, la valeur attendue reste `false`.
+
+### Après une reconstruction du cluster
+
+La suppression du cluster supprime aussi la clé privée du contrôleur. Sans
+restauration de cette clé, l’ancien fichier chiffré n’est plus déchiffrable.
+Pour ce jeton de démonstration, générer une nouvelle valeur et la resceller,
+une fois le contrôleur disponible, depuis la racine du dépôt :
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32), end="")' \
+  | kubectl create secret generic api-secret --namespace dev \
+      --from-file=JETON=/dev/stdin --dry-run=client -o json \
+  | kubeseal --context kind-plateforme \
+      --controller-name sealed-secrets-controller \
+      --controller-namespace kube-system --format yaml \
+  > deploy/overlays/dev/api-secret-scelle.yaml
+```
+
+Cette commande renouvelle le jeton de démonstration sans l’afficher ni
+l’enregistrer en clair dans un fichier. Valider le fichier avec
+`kubeseal --context kind-plateforme --validate < deploy/overlays/dev/api-secret-scelle.yaml`,
+puis commiter et pousser le fichier scellé. Une variable d’environnement est
+lue au démarrage du pod : après renouvellement d’un secret existant, les pods
+doivent redémarrer pour utiliser la nouvelle valeur.
+
+### Validation effectuée le 30 octobre 2026
+
+- Installation du contrôleur par ArgoCD, sans `helm install` manuel.
+- Validation cryptographique du fichier avec `kubeseal --validate`.
+- Secret créé avec un propriétaire de type `SealedSecret` et condition
+  `Synced=True` sur la ressource scellée.
+- Valeur brute et encodage base64 du jeton absents des fichiers candidats et
+  des objets de l’historique Git avant publication.
+- Réponse de dev : `jeton_present: true` ; réponse de prod : `false`.
+- Un replica disponible en dev, deux en prod ; les quatre applications
+  ArgoCD sont `Synced` et `Healthy`.
+
+Le jeton a été créé uniquement en mémoire. Aucune clé privée du contrôleur
+n’a été exportée et aucun `Secret` Kubernetes en clair n’a été versionné.
