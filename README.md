@@ -88,3 +88,16 @@ deploy/                   manifests des prochains TP
 
 Les blocs `moved` conservent les ressources existantes lors du passage aux
 modules. Ils n'empêchent pas un `destroy` explicite ni une création depuis zéro.
+
+## Validation du TP1
+
+Vérifications effectuées le 30 octobre 2026 :
+
+- `terraform fmt -check -recursive` et `terraform validate` réussissent.
+- La destruction puis reconstruction recrée les deux ressources Terraform.
+- Le nœud Kubernetes est `Ready` et `argocd-server` est disponible (`1/1`).
+- L'interface ArgoCD répond en HTTP par un port-forward temporaire.
+- Un nouveau `terraform plan -var-file=plateforme.tfvars` indique `No changes`.
+
+Versions résolues : provider kind `0.13.0`, provider Helm `3.3.0`, chart ArgoCD
+`10.10.3`, Kubernetes `v1.37.0`. Le fichier de verrouillage fixe les providers.
