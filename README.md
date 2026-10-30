@@ -1,7 +1,7 @@
 # Plateforme DevOps
 
-TP1 et TP2 : un cluster Kubernetes local et ArgoCD gérés par Terraform,
-puis une API déployée en dev et en prod par GitOps.
+TP1 à TP3 : un cluster Kubernetes local et ArgoCD gérés par Terraform,
+une API déployée par GitOps et une image publiée par GitHub Actions.
 
 ## Prérequis
 
@@ -126,8 +126,9 @@ docker build -t api:initial app
 kind load docker-image api:initial --name plateforme
 ```
 
-Cette image n'est pas encore publiée dans une registry. Après une destruction
-du cluster, il faut la recharger. `imagePullPolicy: IfNotPresent` permet aux
+Au TP2, cette image n’était pas encore publiée dans une registry. Après une
+destruction du cluster, il fallait la recharger. Depuis le TP3, les overlays
+utilisent une image publique GHCR, téléchargée automatiquement par les nœuds. `imagePullPolicy: IfNotPresent` permet aux
 pods d'utiliser l'image chargée dans les nœuds kind.
 
 ### Vérifier les environnements
@@ -159,3 +160,50 @@ scaling manuel et de recréation du Deployment dev ont été réalisés séparé
 Le 30 octobre 2026, les trois applications étaient `Synced` et `Healthy`.
 La correction du scaling manuel a pris environ 2,4 s ; le Deployment dev
 a été recréé avec un nouvel UID et un pod disponible en environ 2,3 s.
+
+## TP3 : du commit au cluster
+
+Le workflow `.github/workflows/pipeline.yml` se déclenche sur un push dans
+`main` uniquement si des fichiers sous `app/` ont changé.
+
+1. Le pipeline calcule un tag avec les huit premiers caractères du commit.
+2. Il construit l’image en passant ce tag comme argument `VERSION`.
+3. Il publie l’image dans `ghcr.io/yxmmy/plateforme-devops`.
+4. Il met à jour l’overlay dev avec `kustomize edit set image` et pousse un
+   commit dont l’auteur est `pipeline-ci`.
+5. ArgoCD lit ce commit et déploie la nouvelle image. Le pipeline ne possède
+   aucun accès au cluster.
+
+Les permissions `contents: write` et `packages: write` servent respectivement
+au commit du tag et à la publication de l’image. L’authentification utilise le
+`GITHUB_TOKEN` temporaire fourni par GitHub Actions ; aucun secret personnel
+n’est ajouté au dépôt.
+
+Les exécutions sont sérialisées pour éviter que deux pipelines modifient
+l’overlay en même temps. Une relance qui trouve déjà le bon tag n’essaie pas
+de créer un commit vide.
+
+### Promotion en prod
+
+La promotion consiste à recopier `newName` et `newTag` de l’overlay dev dans
+l’overlay prod, puis à commiter et pousser. Les deux replicas prod utilisent
+alors la même image validée en dev. Le pipeline ne promeut pas automatiquement.
+
+Après une exécution du pipeline, faire un `git pull --ff-only` avant de
+retravailler : le pipeline a ajouté un commit sur `main`.
+
+### Validation effectuée le 30 octobre 2026
+
+- Le [premier pipeline](https://github.com/yxmmy/plateforme-devops/actions/runs/41047495835)
+  s’est terminé avec succès.
+- L’image `ghcr.io/yxmmy/plateforme-devops:00079854` est accessible sans identifiant.
+- Le commit automatique `a57c2bd` a été créé par `pipeline-ci`.
+- L’API de dev a répondu avec `service: api-plateforme` et `version: 00079854`.
+- Le commit de promotion `538ad96` a déployé cette même version sur les deux
+  replicas prod.
+- Les applications `racine`, `api-dev` et `api-prod` sont `Synced` et `Healthy`.
+- Le commit du pipeline n’a pas déclenché un deuxième pipeline : il ne modifie
+  que `deploy/`, exclu par le filtre `app/**`. Les pushes faits avec le
+  `GITHUB_TOKEN` ne redéclenchent pas non plus les workflows de push.
+
+Les images GHCR remplacent le chargement manuel de `api:initial` dans le cluster.
