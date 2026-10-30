@@ -1,0 +1,58 @@
+name: pipeline
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**"]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: pipeline-main
+  cancel-in-progress: false
+
+jobs:
+  construire-et-deployer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculer le tag et le nom de l'image
+        run: |
+          echo "TAG=${GITHUB_SHA::8}" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Se connecter à la registry GitHub
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construire et pousser l'image
+        run: |
+          docker build --build-arg VERSION="$TAG" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            -t "$IMAGE:$TAG" app
+          docker push "$IMAGE:$TAG"
+
+      - name: Écrire le nouveau tag dans Git
+        run: |
+          git config user.name pipeline-ci
+          git config user.email pipeline-ci@users.noreply.github.com
+          git pull --rebase origin main
+          cd deploy/overlays/dev
+          kustomize edit set image "api=$IMAGE:$TAG"
+          cd ../../..
+          git add deploy/overlays/dev/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Le tag $TAG est déjà déclaré en dev."
+          else
+            git commit -m "Déploie l'image $TAG en dev"
+            git push origin HEAD:main
+          fi
