@@ -1,6 +1,7 @@
 # Plateforme DevOps
 
-TP1 : un cluster Kubernetes local et ArgoCD, gérés par Terraform.
+TP1 et TP2 : un cluster Kubernetes local et ArgoCD gérés par Terraform,
+puis une API déployée en dev et en prod par GitOps.
 
 ## Prérequis
 
@@ -22,7 +23,8 @@ chart ArgoCD. Ce fichier ne contient aucun secret et est versionné.
 
 Le module `cluster` crée le cluster kind et expose les informations de connexion.
 Le provider Helm utilise ces sorties pour se connecter au cluster. Le module
-`argocd` installe la release `argocd` dans le namespace du même nom.
+`argocd` installe la release `argocd` dans le namespace du même nom et,
+depuis le TP2, l’application racine qui lit le dépôt Git.
 
 Les contraintes des providers sont dans `infra/versions.tf`. Leurs versions
 exactes et empreintes sont enregistrées dans `.terraform.lock.hcl`.
@@ -54,8 +56,8 @@ kubectl --context kind-plateforme -n argocd get secret argocd-initial-admin-secr
   -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-Ne pas copier ce mot de passe dans le dépôt. Aucune application n'est encore
-configurée dans ArgoCD à la fin du TP1.
+Ne pas copier ce mot de passe dans le dépôt. À la fin du TP1, aucune application n’était encore configurée dans ArgoCD.
+Le TP2 ajoute les applications `racine`, `api-dev` et `api-prod`.
 
 ## Détruire et reconstruire
 
@@ -101,3 +103,59 @@ Vérifications effectuées le 30 octobre 2026 :
 
 Versions résolues : provider kind `0.13.0`, provider Helm `3.3.0`, chart ArgoCD
 `10.10.3`, Kubernetes `v1.37.0`. Le fichier de verrouillage fixe les providers.
+
+## TP2 : déploiement GitOps
+
+L'application `racine`, installée par Terraform avec le chart `argocd-apps`
+`2.0.6`, surveille `deploy/argocd/` sur la branche `main` du dépôt public.
+Elle crée les applications `api-dev` et `api-prod`, qui lisent leurs overlays.
+Les trois applications utilisent la synchronisation automatique, `prune` et
+`selfHeal`.
+
+La base contient un Deployment et un Service `api`, sans namespace imposé.
+Les overlays fixent le namespace et le tag d'image : un replica en `dev`, deux
+en `prod`. Le Service expose le port 80 vers le port nommé `http` (8080) des pods.
+La readiness probe utilise `/healthz`.
+
+### Image locale
+
+Depuis la racine du dépôt, une fois le cluster créé :
+
+```bash
+docker build -t api:initial app
+kind load docker-image api:initial --name plateforme
+```
+
+Cette image n'est pas encore publiée dans une registry. Après une destruction
+du cluster, il faut la recharger. `imagePullPolicy: IfNotPresent` permet aux
+pods d'utiliser l'image chargée dans les nœuds kind.
+
+### Vérifier les environnements
+
+```bash
+kubectl kustomize deploy/overlays/dev
+kubectl kustomize deploy/overlays/prod
+kubectl --context kind-plateforme -n argocd get applications
+kubectl --context kind-plateforme -n dev get deploy,svc,pods
+kubectl --context kind-plateforme -n prod get deploy,svc,pods
+kubectl --context kind-plateforme -n dev port-forward svc/api 8080:80
+```
+
+Dans un autre terminal, `curl localhost:8080/` renvoie le nom du service,
+la version et la présence ou non du jeton. `jeton_present: false` est normal
+avant le TP sur les secrets.
+
+### Modifier le déploiement
+
+Modifier l'overlay, vérifier le résultat avec `kubectl kustomize`, puis commiter
+et pousser. ArgoCD consulte périodiquement Git et applique le nouvel état.
+Un changement manuel dans le cluster est corrigé par `selfHeal` : il ne remplace
+pas une modification du dépôt.
+
+Le TP2 a été vérifié en passant temporairement prod à trois replicas par Git,
+puis en rétablissant les deux replicas attendus. Les tests de correction du
+scaling manuel et de recréation du Deployment dev ont été réalisés séparément.
+
+Le 30 octobre 2026, les trois applications étaient `Synced` et `Healthy`.
+La correction du scaling manuel a pris environ 2,4 s ; le Deployment dev
+a été recréé avec un nouvel UID et un pod disponible en environ 2,3 s.
