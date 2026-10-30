@@ -9,4 +9,4 @@ images:
     newTag: initial
 replicas:
   - name: api
-    count: 2
+    count: 3
