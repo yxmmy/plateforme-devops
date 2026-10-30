@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: dev
 resources:
 - ../../base
+- api-secret-scelle.yaml
 images:
 - name: api
   newName: ghcr.io/yxmmy/plateforme-devops
